@@ -154,28 +154,37 @@
 
             // User login
             $('#loginForm').on('submit', function(e) {
-                e.preventDefault();
-                const loginData = {
-                    loginId: $('#loginIdLogin').val(),
-                    password: $('#passwordLogin').val()
-                };
+    e.preventDefault();
+    const loginData = {
+        loginId: $('#loginIdLogin').val(),
+        password: $('#passwordLogin').val()
+    };
 
-                $.ajax({
-                    url: 'http://localhost:3000/api/login',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify(loginData),
-                    success: function(response) {
-                        alert('Login successful!');
-                        $('#loginContainer').hide();
-                        socket.emit('joinLiveUsers', { socketId: socket.id, userName: response.user.name });
-                        $('#liveUsersContainer').prepend(`<div>Welcome, ${response.user.name}!</div>`);
-                    },
-                    error: function(xhr) {
-                        $('#loginError').text(xhr.responseJSON.error || 'Login failed.');
-                    }
-                });
-            });
+    $.ajax({
+        url: 'http://localhost:3000/api/login',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(loginData),
+        success: function(response) {
+            alert('Login successful!');
+            $('#loginContainer').hide();
+            socket.emit('joinLiveUsers', { socketId: socket.id, userName: response.user.name });
+            $('#liveUsersContainer').prepend(`<div>Welcome, ${response.user.name}!</div>`);
+        },
+        error: function(xhr) {
+            $('#loginError').text(xhr.responseJSON.error || 'Login failed.');
+        }
+    });
+});
+// Update live users when a user logs in
+socket.on('userLoggedIn', function(user) {
+    liveUsers[user.socketId] = {
+        email: user.email,
+        name: user.name,
+        online: true
+    };
+    io.emit('updateUserList', liveUsers); // Emit to update the user list on the server side
+});
 
             // Socket.io connection
             socket.on('updateUserList', function(updatedLiveUsers) {
