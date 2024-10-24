@@ -95,6 +95,14 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ error: 'Invalid login ID or password.' });
         }
 
+        // Emit an event to update live users
+        io.emit('userLoggedIn', {
+            socketId: user.socketId,  // Keep the existing socket ID
+            email: user.email,
+            name: `${user.firstName} ${user.lastName}`,
+            online: true
+        });
+
         res.json({ message: 'Login successful!', user: { name: user.firstName } });
     } catch (error) {
         console.error('Error during login:', error);
