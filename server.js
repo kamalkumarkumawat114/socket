@@ -28,14 +28,37 @@ const userSchema = new mongoose.Schema({
     firstName: String,
     lastName: String,
     mobileNo: { type: String, required: true, validate: /^[0-9]{10}$/ },
-    email: { type: String, required: true, unique: true, validate: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+    email: {
+        type: String,
+        required: [true, 'Email is required'],
+        unique: true,
+        validate: {
+          validator: function(v) {
+            return /.+\@.+\..+/.test(v);
+          },
+          message: props => `${props.value} is not a valid email!`
+        }
+      },
     address: String,
     street: String,
     city: String,
     state: String,
     country: String,
     loginId: { type: String, required: true, unique: true, validate: /^[a-zA-Z0-9]{8}$/ },
-    password: { type: String, required: true, validate: /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{6,}$/ },
+    // password: { type: String, required: true, validate: /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{6,}$/ },
+    password: {
+        type: String,
+        required: true,
+        minlength: 8, // Minimum length for the password
+        validate: {
+            validator: function(v) {
+                // Custom validation logic: At least one uppercase, one lowercase, one number, and one special character
+                return /[a-z]/.test(v) && /[A-Z]/.test(v) && /[0-9]/.test(v) && /[!@#$%^&*]/.test(v);
+            },
+            message: props => `${props.value} Password must be at least 8 characters,one lowercase,one uppercase,one number,one special character!`,
+        },
+    },
+    
     socketId: { type: String, unique: true },
 });
 
