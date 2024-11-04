@@ -134,6 +134,7 @@ $(document).ready(function() {
         if (response.ok) {
           $('#registrationError').text('');
           socket.emit('register', { email: formData.email });
+            alert("Registration successful!");
         } else {
           $('#registrationError').text(result.error);
         }
@@ -158,6 +159,7 @@ $(document).ready(function() {
         if (response.ok) {
           $('#loginError').text('');
           socket.emit('register', { email: formData.email });
+            alert("Login successful!");
         } else {
           $('#loginError').text(result.error);
         }
