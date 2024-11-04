@@ -1,201 +1,144 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const bodyParser = require("body-parser");
-const cors = require("cors");
-const http = require("http");
-const socketIo = require("socket.io");
-const dotenv = require("dotenv");
-const path = require("path");
-const bcrypt = require("bcrypt");
-
-dotenv.config();
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const session = require('express-session');
+const rateLimit = require('express-rate-limit');
+const compression = require('compression');
+const http = require('http');
+const socketIo = require('socket.io');
+const path = require('path');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server);
-const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, "public"))); // Serve static files
-
-// MongoDB connection
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
-// User Schema and Model
+// Environment variables
+const PORT = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGO_URI;
+const SESSION_SECRET = process.env.SESSION_SECRET || 'supersecretkey';
+
+// Connect to MongoDB
+mongoose.connect(MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.log(err));
+
+// Define user schema
 const userSchema = new mongoose.Schema({
   firstName: String,
   lastName: String,
-  mobileNo: { type: String, required: true, validate: /^[0-9]{10}$/ },
-  email: {
-    type: String,
-    required: [true, "Email is required"],
-    unique: true,
-    validate: {
-      validator: function (v) {
-        return /.+\@.+\..+/.test(v);
-      },
-      message: (props) => `${props.value} is not a valid email!`,
-    },
-  },
+  email: { type: String, unique: true },
+  mobile: String,
   address: String,
-  street: String,
   city: String,
   state: String,
   country: String,
-  loginId: {
-    type: String,
-    required: true,
-    unique: true,
-    validate: /^[a-zA-Z0-9]{8}$/,
-  },
-  // password: { type: String, required: true, validate: /^(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{6,}$/ },
-  password: {
-    type: String,
-    required: true,
-    minlength: 8, // Minimum length for the password
-    validate: {
-      validator: function (v) {
-        // Custom validation logic: At least one uppercase, one lowercase, one number, and one special character
-        return (
-          /[a-z]/.test(v) &&
-          /[A-Z]/.test(v) &&
-          /[0-9]/.test(v) &&
-          /[!@#$%^&*]/.test(v)
-        );
-      },
-      message: (props) =>
-        `${props.value} Password must be at least 8 characters,one lowercase,one uppercase,one number,one special character!`,
-    },
-  },
-
-  socketId: { type: String, unique: true },
+  loginId: String,
+  password: String,
+  socketId: String,
+  status: { type: String, default: "Offline" },
 });
 
-userSchema.pre("save", async function (next) {
-  if (this.isModified("password")) {
-    this.password = await bcrypt.hash(this.password, 10);
-  }
-  next();
+const User = mongoose.model('User', userSchema);
+
+// Middleware
+app.use(express.json());
+app.use(compression());
+app.use(cors());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Session management
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false } // set to true in production with HTTPS
+}));
+
+// Rate limiting to prevent abuse
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
 });
+app.use(limiter);
 
-const User = mongoose.model("User", userSchema);
-const liveUsers = {};
-
-// Helper function to update live users
-const updateLiveUsers = (socketId, userData) => {
-  liveUsers[socketId] = {
-    email: userData.email,
-    name: `${userData.firstName} ${userData.lastName}`,
-    online: true,
-  };
-  io.emit("updateUserList", liveUsers);
-};
-
-// API endpoint to save user data
-app.post("/api/users", async (req, res) => {
-  const { email, loginId, socketId } = req.body;
-
-  if (!email || !loginId || !socketId) {
-    return res
-      .status(400)
-      .json({ error: "Email, Login ID, and Socket ID are required." });
-  }
-
+// Registration endpoint
+app.post('/register', async (req, res) => {
   try {
-    const existingUser = await User.findOne({ $or: [{ email }, { loginId }] });
+    const { email, password } = req.body;
+    const existingUser = await User.findOne({ email });
     if (existingUser) {
-      const errorField = existingUser.email === email ? "Email" : "Login ID";
-      return res.status(400).json({ error: `${errorField} already exists.` });
+      return res.status(400).json({ error: 'Email already registered' });
     }
-
-    const user = new User({ ...req.body, socketId });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ ...req.body, password: hashedPassword });
     await user.save();
-    console.log("User created successfully:", user);
-    updateLiveUsers(socketId, user);
-    res.status(201).json({ message: "User created successfully!" });
+    res.status(201).json(user);
   } catch (error) {
-    console.error("Error occurred while saving user:", error);
-    res.status(500).json({ error: "Server error.", details: error.message });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // Login endpoint
-app.post("/api/login", async (req, res) => {
-  const { loginId, password } = req.body;
-
-  try {
-    const user = await User.findOne({ loginId });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(400).json({ error: "Invalid login ID or password." });
-    }
-
-    // Emit an event to update live users
-    io.emit("userLoggedIn", {
-      socketId: user.socketId, // Keep the existing socket ID
-      email: user.email,
-      name: `${user.firstName} ${user.lastName}`,
-      online: true,
-    });
-
-    res.json({ message: "Login successful!", user: { name: user.firstName } });
-  } catch (error) {
-    console.error("Error during login:", error);
-    res.status(500).json({ error: "Server error." });
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email });
+  if (user && await bcrypt.compare(password, user.password)) {
+    req.session.userId = user._id;
+    user.status = "Online";
+    user.socketId = null;
+    await user.save();
+    res.json({ message: "Login successful", user });
+  } else {
+    res.status(400).json({ error: "Invalid email or password" });
   }
 });
 
-// Get user info by socket ID
-app.get("/api/users/:socketId", async (req, res) => {
-  const { socketId } = req.params;
-  console.log("Looking up user with socket ID:", socketId);
-
-  try {
-    const user = await User.findOne({ socketId });
-    if (!user) return res.status(404).json({ error: "User not found." });
-
+// Profile endpoint
+app.get('/profile/:userId', async (req, res) => {
+  const user = await User.findById(req.params.userId);
+  if (user) {
     res.json(user);
-  } catch (error) {
-    console.error("Error fetching user:", error);
-    res.status(500).json({ error: "Failed to fetch user." });
+  } else {
+    res.status(404).json({ error: "User not found" });
   }
 });
 
-// Get all users
-app.get("/api/users", async (req, res) => {
-  try {
-    const users = await User.find();
-    res.json(users);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch users" });
-  }
+// Socket connections
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  socket.on('register', async (data) => {
+    const user = await User.findOneAndUpdate(
+      { email: data.email },
+      { socketId: socket.id, status: 'Online' },
+      { new: true }
+    );
+    io.emit('userStatus', { user });
+  });
+
+  socket.on('disconnect', async () => {
+    await User.findOneAndUpdate(
+      { socketId: socket.id },
+      { status: 'Offline' }
+    );
+    io.emit('userStatus', { user: null });
+  });
 });
 
-// Socket.io connection
-io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
-
-  socket.on("register", async (userData) => {
-    updateLiveUsers(socket.id, userData);
-    await User.updateOne({ email: userData.email }, { socketId: socket.id });
-  });
-
-  socket.on("disconnect", async () => {
-    console.log("User disconnected:", socket.id);
-    const user = Object.values(liveUsers).find((u) => u.socketId === socket.id);
-    if (user) {
-      await User.updateOne({ email: user.email }, { socketId: null });
-      delete liveUsers[socket.id];
-      io.emit("updateUserList", liveUsers);
-    }
-  });
+// Get live users
+app.get('/live-users', async (req, res) => {
+  const users = await User.find({ status: 'Online' });
+  res.json(users);
 });
 
 // Start server
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
